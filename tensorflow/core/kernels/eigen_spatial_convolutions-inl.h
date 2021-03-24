@@ -29,7 +29,6 @@ namespace Eigen {
 
 namespace internal {
 
-#if TF_USE_CUSTOM_EIGEN_PACK
 // WARNING: Most of the code here implicitly assumes that the matrix is in
 // ColMajor layout. This is guaranteed by the tensor contraction (see
 // TensorContraction.h).
@@ -1539,7 +1538,6 @@ struct gemm_pack_rhs<
     }
   }
 };
-#endif
 }  // end namespace internal
 
 /** SpatialConvolution
