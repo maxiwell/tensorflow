@@ -267,6 +267,15 @@ class TensorContractionInputMapper<
     return loadPacket(row, rowIndex, colIndex, otherIndex);
   }
 
+  //maxiwell
+  template <typename PacketT>
+  EIGEN_DEVICE_FUNC
+  EIGEN_ALWAYS_INLINE PacketT loadPacket(Index row, Index patchIndex) const {
+    Index rowIndex, colIndex, otherIndex;
+    computeBaseIndices(patchIndex, rowIndex, colIndex, otherIndex);
+    return loadPacket<PacketT>(row, rowIndex, colIndex, otherIndex);
+  }
+
   EIGEN_DEVICE_FUNC
   EIGEN_ALWAYS_INLINE const TensorEvaluator<ArgType, Device>& impl() const {
     return m_impl;
@@ -364,6 +373,23 @@ class TensorContractionInputMapper<
                                                         colIndex, otherIndex);
   }
 
+  //maxiwell
+  template <typename PacketT>
+  EIGEN_DEVICE_FUNC
+  EIGEN_ALWAYS_INLINE PacketT loadPacket(Index patchId, Index rowIndex,
+                                        Index colIndex,
+                                        Index otherIndex) const {
+    const Index packetSize = internal::unpacket_traits<PacketT>::size;
+    EIGEN_STATIC_ASSERT(packetSize > 1, YOU_MADE_A_PROGRAMMING_MISTAKE)
+    eigen_assert(patchId < patchDepth() * patchRows() * m_patch_cols);
+
+    if (nonStandardPatches()) {
+      return packetWithPossibleZero(patchId, rowIndex, colIndex, otherIndex);
+    }
+    typedef decltype(m_impl) TensorEvaluatorT;
+    return loadPacketStandard<PacketT, TensorEvaluatorT>(patchId, rowIndex,
+                                                        colIndex, otherIndex);
+  }
   // Helper function to load a 'partial' packet - this is the single column
   // part of a packet that is split across two columns. In the 'partial' packet,
   // the elements corresponding to the column (specified through colOffset) are
@@ -752,6 +778,15 @@ class TensorContractionSubMapper<
     return m_base_mapper.template loadPacket<Alignment>(i + m_depth_offset,
                                                         j + m_col_offset);
   }
+
+  //maxiwell
+  template <typename PacketT>
+  EIGEN_DEVICE_FUNC EIGEN_ALWAYS_INLINE PacketT loadPacket(Index i,
+                                                        Index j) const {
+    return m_base_mapper.template loadPacket<PacketT>(i + m_depth_offset,
+                                                      j + m_col_offset);
+  }
+
   EIGEN_DEVICE_FUNC EIGEN_ALWAYS_INLINE Scalar
   loadCoeffStandard(Index i) const {
     return m_base_mapper.loadCoeffStandard(i + m_depth_offset, m_rowIndex,
@@ -1042,211 +1077,211 @@ class TensorContractionSubMapper<
 // *) nr - number of registers along the 'n' dimension.
 //    See GeneralBlockPanelKernel.h and "Anatomy of High-Performance Matrix
 //    Multiplication" paper.
-template <typename NewDimension, Index Rows, Index Cols, typename ArgType,
-          typename Device, typename Scalar, typename Index,
-          typename nocontract_t, typename contract_t, int packet_size,
-          bool inner_dim_contiguous, bool inner_dim_reordered, int Alignment,
-          int nr>
-struct gemm_pack_rhs<
-    Scalar, Index,
-    TensorContractionSubMapper<
-        Scalar, Index, Rhs,
-        TensorEvaluator<
-            const TensorReshapingOp<
-                NewDimension, const TensorImagePatchOp<Rows, Cols, ArgType> >,
-            Device>,
-        nocontract_t, contract_t, packet_size, inner_dim_contiguous,
-        inner_dim_reordered, Alignment>,
-    nr, ColMajor, false, false> {
-  typedef TensorContractionSubMapper<
-      Scalar, Index, Rhs,
-      TensorEvaluator<
-          const TensorReshapingOp<
-              NewDimension, const TensorImagePatchOp<Rows, Cols, ArgType> >,
-          Device>,
-      nocontract_t, contract_t, packet_size, inner_dim_contiguous,
-      inner_dim_reordered, Alignment>
-      SubMapper;
-  typedef SubMapper DataMapper;
-  typedef typename packet_traits<Scalar>::type Packet;
-
-  EIGEN_STATIC_ASSERT((nr == 4), YOU_MADE_A_PROGRAMMING_MISTAKE)
-
-  EIGEN_DEVICE_FUNC
-  EIGEN_DONT_INLINE void operator()(Scalar* block, const DataMapper& rhs,
-                                    Index depth, Index cols, Index stride = 0,
-                                    Index offset = 0) const {
-    eigen_assert(stride == 0);
-    eigen_assert(offset == 0);
-
-    const Index packet_cols4 = (cols / 4) * 4;
-    const Index peeled_k = (depth / packet_size) * packet_size;
-    const bool non_standard_patches = rhs.nonStandardPatches();
-
-    for (Index j2 = 0; j2 < packet_cols4; j2 += 4) {
-      const SubMapper dm0 = rhs.getLinearMapper(0, j2 + 0);
-      const SubMapper dm1 = rhs.getLinearMapper(0, j2 + 1);
-      const SubMapper dm2 = rhs.getLinearMapper(0, j2 + 2);
-      const SubMapper dm3 = rhs.getLinearMapper(0, j2 + 3);
-
-      Index k = 0;
-      if ((packet_size % 4) == 0 && !non_standard_patches) {
-        // FAST PATH:
-        // Iterate over patch columns and rows, if we know that a single
-        // packet do not span across multiple rows or columns.
-        if ((rhs.patchDepth() % packet_size) == 0) {
-          const Index start_col = rhs.colOffset();
-          const Index max_col = rhs.maxCol(peeled_k);
-
-          for (Index c = start_col; c < max_col; ++c) {
-            eigen_assert(k <= peeled_k);
-
-            const Index start_row = (c == start_col) ? rhs.rowOffset() : 0;
-            const Index max_row = rhs.maxRow(peeled_k, c);
-
-            const bool pad_col0 = dm0.padCol(c);
-            const bool pad_col1 = dm1.padCol(c);
-            const bool pad_col2 = dm2.padCol(c);
-            const bool pad_col3 = dm3.padCol(c);
-
-            // Check if we can squeeze reads along the `row` and `depth`
-            // dimensions (two innermost dimensions).
-            if (!pad_col0 && !pad_col1 && !pad_col2 && !pad_col3 &&    //
-                !dm0.padRow(start_row) && !dm0.padRow(max_row - 1) &&  //
-                !dm1.padRow(start_row) && !dm1.padRow(max_row - 1) &&  //
-                !dm2.padRow(start_row) && !dm2.padRow(max_row - 1) &&  //
-                !dm3.padRow(start_row) && !dm3.padRow(max_row - 1)) {
-              // Compute how many elements we can squeeze read.
-              const Index start_depth =
-                  (c == start_col) ? rhs.depthOffset() : 0;
-
-              // Upper bound for the number of elements in the depth dimension
-              // that we can squeeze read.
-              const Index squeeze_length =
-                  (max_row - start_row) * rhs.patchDepth() - start_depth;
-
-              // Do not overshoot beyond the block size.
-              const Index max_depth =
-                  start_depth + std::min<Index>(peeled_k - k, squeeze_length);
-              eigen_assert((max_depth - start_depth) % packet_size == 0);
-
-              const Index idx0 = dm0.baseIndex(start_row, c);
-              const Index idx1 = dm1.baseIndex(start_row, c);
-              const Index idx2 = dm2.baseIndex(start_row, c);
-              const Index idx3 = dm3.baseIndex(start_row, c);
-
-              for (Index d = start_depth; d < max_depth; d += packet_size) {
-                eigen_assert(k < peeled_k);
-                PacketBlock<Packet, 4> kernel;
-                kernel.packet[0] = rhs.packetNoPadding(d, idx0);
-                kernel.packet[1] = rhs.packetNoPadding(d, idx1);
-                kernel.packet[2] = rhs.packetNoPadding(d, idx2);
-                kernel.packet[3] = rhs.packetNoPadding(d, idx3);
-                ptranspose(kernel);
-                pstoreu(block + 0 * packet_size, kernel.packet[0]);
-                pstoreu(block + 1 * packet_size, kernel.packet[1]);
-                pstoreu(block + 2 * packet_size, kernel.packet[2]);
-                pstoreu(block + 3 * packet_size, kernel.packet[3]);
-                block += 4 * packet_size;
-                k += packet_size;
-              }
-
-              // Go to the next column.
-              continue;
-            }
-
-            // If we can't squeeze reads, process rows one by one.
-            for (Index r = start_row; r < max_row; ++r) {
-              eigen_assert(k <= peeled_k);
-
-              const bool pad0 = pad_col0 || dm0.padRow(r);
-              const bool pad1 = pad_col1 || dm1.padRow(r);
-              const bool pad2 = pad_col2 || dm2.padRow(r);
-              const bool pad3 = pad_col3 || dm3.padRow(r);
-
-              const Index idx0 = dm0.baseIndex(r, c);
-              const Index idx1 = dm1.baseIndex(r, c);
-              const Index idx2 = dm2.baseIndex(r, c);
-              const Index idx3 = dm3.baseIndex(r, c);
-
-              const Index start_depth = ((c == start_col) && (r == start_row))
-                                            ? rhs.depthOffset()
-                                            : 0;
-              const Index max_depth = rhs.maxDepth(peeled_k - k, start_depth);
-              eigen_assert((max_depth - start_depth) % packet_size == 0);
-
-              for (Index d = start_depth; d < max_depth; d += packet_size) {
-                eigen_assert(k < peeled_k);
-                PacketBlock<Packet, 4> kernel;
-                kernel.packet[0] = pad0 ? pset1<Packet>(Scalar(0))
-                                        : rhs.packetNoPadding(d, idx0);
-                kernel.packet[1] = pad1 ? pset1<Packet>(Scalar(0))
-                                        : rhs.packetNoPadding(d, idx1);
-                kernel.packet[2] = pad2 ? pset1<Packet>(Scalar(0))
-                                        : rhs.packetNoPadding(d, idx2);
-                kernel.packet[3] = pad3 ? pset1<Packet>(Scalar(0))
-                                        : rhs.packetNoPadding(d, idx3);
-                ptranspose(kernel);
-                pstoreu(block + 0 * packet_size, kernel.packet[0]);
-                pstoreu(block + 1 * packet_size, kernel.packet[1]);
-                pstoreu(block + 2 * packet_size, kernel.packet[2]);
-                pstoreu(block + 3 * packet_size, kernel.packet[3]);
-                block += 4 * packet_size;
-                k += packet_size;
-              }
-            }
-          }
-
-          // The loop above should fill peeled_k elements.
-          eigen_assert(peeled_k == k);
-
-        } else {
-          for (; k < peeled_k; k += packet_size) {
-            PacketBlock<Packet, 4> kernel;
-            kernel.packet[0] = dm0.loadPacketStandard(k);
-            kernel.packet[1] = dm1.loadPacketStandard(k);
-            kernel.packet[2] = dm2.loadPacketStandard(k);
-            kernel.packet[3] = dm3.loadPacketStandard(k);
-            ptranspose(kernel);
-            pstoreu(block + 0 * packet_size, kernel.packet[0]);
-            pstoreu(block + 1 * packet_size, kernel.packet[1]);
-            pstoreu(block + 2 * packet_size, kernel.packet[2]);
-            pstoreu(block + 3 * packet_size, kernel.packet[3]);
-            block += 4 * packet_size;
-          }
-        }
-      }
-
-      // Copy the remaining coefficients of the column block after the peeled_k.
-      if (!rhs.nonStandardPatches()) {
-        for (; k < depth; k++) {
-          block[0] = dm0.loadCoeffStandard(k);
-          block[1] = dm1.loadCoeffStandard(k);
-          block[2] = dm2.loadCoeffStandard(k);
-          block[3] = dm3.loadCoeffStandard(k);
-          block += 4;
-        }
-      } else {
-        for (; k < depth; k++) {
-          block[0] = dm0(k);
-          block[1] = dm1(k);
-          block[2] = dm2(k);
-          block[3] = dm3(k);
-          block += 4;
-        }
-      }
-    }
-
-    // copy the remaining columns one at a time (nr==1)
-    for (Index j2 = packet_cols4; j2 < cols; ++j2) {
-      const SubMapper dm0 = rhs.getLinearMapper(0, j2);
-      for (Index k = 0; k < depth; k++) {
-        *block = dm0(k);
-        block += 1;
-      }
-    }
-  }
-};
+//template <typename NewDimension, Index Rows, Index Cols, typename ArgType,
+//          typename Device, typename Scalar, typename Index,
+//          typename nocontract_t, typename contract_t, int packet_size,
+//          bool inner_dim_contiguous, bool inner_dim_reordered, int Alignment,
+//          int nr>
+//struct gemm_pack_rhs<
+//    Scalar, Index,
+//    TensorContractionSubMapper<
+//        Scalar, Index, Rhs,
+//        TensorEvaluator<
+//            const TensorReshapingOp<
+//                NewDimension, const TensorImagePatchOp<Rows, Cols, ArgType> >,
+//            Device>,
+//        nocontract_t, contract_t, packet_size, inner_dim_contiguous,
+//        inner_dim_reordered, Alignment>,
+//    nr, ColMajor, false, false> {
+//  typedef TensorContractionSubMapper<
+//      Scalar, Index, Rhs,
+//      TensorEvaluator<
+//          const TensorReshapingOp<
+//              NewDimension, const TensorImagePatchOp<Rows, Cols, ArgType> >,
+//          Device>,
+//      nocontract_t, contract_t, packet_size, inner_dim_contiguous,
+//      inner_dim_reordered, Alignment>
+//      SubMapper;
+//  typedef SubMapper DataMapper;
+//  typedef typename packet_traits<Scalar>::type Packet;
+//
+//  EIGEN_STATIC_ASSERT((nr == 4), YOU_MADE_A_PROGRAMMING_MISTAKE)
+//
+//  EIGEN_DEVICE_FUNC
+//  EIGEN_DONT_INLINE void operator()(Scalar* block, const DataMapper& rhs,
+//                                    Index depth, Index cols, Index stride = 0,
+//                                    Index offset = 0) const {
+//    eigen_assert(stride == 0);
+//    eigen_assert(offset == 0);
+//
+//    const Index packet_cols4 = (cols / 4) * 4;
+//    const Index peeled_k = (depth / packet_size) * packet_size;
+//    const bool non_standard_patches = rhs.nonStandardPatches();
+//
+//    for (Index j2 = 0; j2 < packet_cols4; j2 += 4) {
+//      const SubMapper dm0 = rhs.getLinearMapper(0, j2 + 0);
+//      const SubMapper dm1 = rhs.getLinearMapper(0, j2 + 1);
+//      const SubMapper dm2 = rhs.getLinearMapper(0, j2 + 2);
+//      const SubMapper dm3 = rhs.getLinearMapper(0, j2 + 3);
+//
+//      Index k = 0;
+//      if ((packet_size % 4) == 0 && !non_standard_patches) {
+//        // FAST PATH:
+//        // Iterate over patch columns and rows, if we know that a single
+//        // packet do not span across multiple rows or columns.
+//        if ((rhs.patchDepth() % packet_size) == 0) {
+//          const Index start_col = rhs.colOffset();
+//          const Index max_col = rhs.maxCol(peeled_k);
+//
+//          for (Index c = start_col; c < max_col; ++c) {
+//            eigen_assert(k <= peeled_k);
+//
+//            const Index start_row = (c == start_col) ? rhs.rowOffset() : 0;
+//            const Index max_row = rhs.maxRow(peeled_k, c);
+//
+//            const bool pad_col0 = dm0.padCol(c);
+//            const bool pad_col1 = dm1.padCol(c);
+//            const bool pad_col2 = dm2.padCol(c);
+//            const bool pad_col3 = dm3.padCol(c);
+//
+//            // Check if we can squeeze reads along the `row` and `depth`
+//            // dimensions (two innermost dimensions).
+//            if (!pad_col0 && !pad_col1 && !pad_col2 && !pad_col3 &&    //
+//                !dm0.padRow(start_row) && !dm0.padRow(max_row - 1) &&  //
+//                !dm1.padRow(start_row) && !dm1.padRow(max_row - 1) &&  //
+//                !dm2.padRow(start_row) && !dm2.padRow(max_row - 1) &&  //
+//                !dm3.padRow(start_row) && !dm3.padRow(max_row - 1)) {
+//              // Compute how many elements we can squeeze read.
+//              const Index start_depth =
+//                  (c == start_col) ? rhs.depthOffset() : 0;
+//
+//              // Upper bound for the number of elements in the depth dimension
+//              // that we can squeeze read.
+//              const Index squeeze_length =
+//                  (max_row - start_row) * rhs.patchDepth() - start_depth;
+//
+//              // Do not overshoot beyond the block size.
+//              const Index max_depth =
+//                  start_depth + std::min<Index>(peeled_k - k, squeeze_length);
+//              eigen_assert((max_depth - start_depth) % packet_size == 0);
+//
+//              const Index idx0 = dm0.baseIndex(start_row, c);
+//              const Index idx1 = dm1.baseIndex(start_row, c);
+//              const Index idx2 = dm2.baseIndex(start_row, c);
+//              const Index idx3 = dm3.baseIndex(start_row, c);
+//
+//              for (Index d = start_depth; d < max_depth; d += packet_size) {
+//                eigen_assert(k < peeled_k);
+//                PacketBlock<Packet, 4> kernel;
+//                kernel.packet[0] = rhs.packetNoPadding(d, idx0);
+//                kernel.packet[1] = rhs.packetNoPadding(d, idx1);
+//                kernel.packet[2] = rhs.packetNoPadding(d, idx2);
+//                kernel.packet[3] = rhs.packetNoPadding(d, idx3);
+//                ptranspose(kernel);
+//                pstoreu(block + 0 * packet_size, kernel.packet[0]);
+//                pstoreu(block + 1 * packet_size, kernel.packet[1]);
+//                pstoreu(block + 2 * packet_size, kernel.packet[2]);
+//                pstoreu(block + 3 * packet_size, kernel.packet[3]);
+//                block += 4 * packet_size;
+//                k += packet_size;
+//              }
+//
+//              // Go to the next column.
+//              continue;
+//            }
+//
+//            // If we can't squeeze reads, process rows one by one.
+//            for (Index r = start_row; r < max_row; ++r) {
+//              eigen_assert(k <= peeled_k);
+//
+//              const bool pad0 = pad_col0 || dm0.padRow(r);
+//              const bool pad1 = pad_col1 || dm1.padRow(r);
+//              const bool pad2 = pad_col2 || dm2.padRow(r);
+//              const bool pad3 = pad_col3 || dm3.padRow(r);
+//
+//              const Index idx0 = dm0.baseIndex(r, c);
+//              const Index idx1 = dm1.baseIndex(r, c);
+//              const Index idx2 = dm2.baseIndex(r, c);
+//              const Index idx3 = dm3.baseIndex(r, c);
+//
+//              const Index start_depth = ((c == start_col) && (r == start_row))
+//                                            ? rhs.depthOffset()
+//                                            : 0;
+//              const Index max_depth = rhs.maxDepth(peeled_k - k, start_depth);
+//              eigen_assert((max_depth - start_depth) % packet_size == 0);
+//
+//              for (Index d = start_depth; d < max_depth; d += packet_size) {
+//                eigen_assert(k < peeled_k);
+//                PacketBlock<Packet, 4> kernel;
+//                kernel.packet[0] = pad0 ? pset1<Packet>(Scalar(0))
+//                                        : rhs.packetNoPadding(d, idx0);
+//                kernel.packet[1] = pad1 ? pset1<Packet>(Scalar(0))
+//                                        : rhs.packetNoPadding(d, idx1);
+//                kernel.packet[2] = pad2 ? pset1<Packet>(Scalar(0))
+//                                        : rhs.packetNoPadding(d, idx2);
+//                kernel.packet[3] = pad3 ? pset1<Packet>(Scalar(0))
+//                                        : rhs.packetNoPadding(d, idx3);
+//                ptranspose(kernel);
+//                pstoreu(block + 0 * packet_size, kernel.packet[0]);
+//                pstoreu(block + 1 * packet_size, kernel.packet[1]);
+//                pstoreu(block + 2 * packet_size, kernel.packet[2]);
+//                pstoreu(block + 3 * packet_size, kernel.packet[3]);
+//                block += 4 * packet_size;
+//                k += packet_size;
+//              }
+//            }
+//          }
+//
+//          // The loop above should fill peeled_k elements.
+//          eigen_assert(peeled_k == k);
+//
+//        } else {
+//          for (; k < peeled_k; k += packet_size) {
+//            PacketBlock<Packet, 4> kernel;
+//            kernel.packet[0] = dm0.loadPacketStandard(k);
+//            kernel.packet[1] = dm1.loadPacketStandard(k);
+//            kernel.packet[2] = dm2.loadPacketStandard(k);
+//            kernel.packet[3] = dm3.loadPacketStandard(k);
+//            ptranspose(kernel);
+//            pstoreu(block + 0 * packet_size, kernel.packet[0]);
+//            pstoreu(block + 1 * packet_size, kernel.packet[1]);
+//            pstoreu(block + 2 * packet_size, kernel.packet[2]);
+//            pstoreu(block + 3 * packet_size, kernel.packet[3]);
+//            block += 4 * packet_size;
+//          }
+//        }
+//      }
+//
+//      // Copy the remaining coefficients of the column block after the peeled_k.
+//      if (!rhs.nonStandardPatches()) {
+//        for (; k < depth; k++) {
+//          block[0] = dm0.loadCoeffStandard(k);
+//          block[1] = dm1.loadCoeffStandard(k);
+//          block[2] = dm2.loadCoeffStandard(k);
+//          block[3] = dm3.loadCoeffStandard(k);
+//          block += 4;
+//        }
+//      } else {
+//        for (; k < depth; k++) {
+//          block[0] = dm0(k);
+//          block[1] = dm1(k);
+//          block[2] = dm2(k);
+//          block[3] = dm3(k);
+//          block += 4;
+//        }
+//      }
+//    }
+//
+//    // copy the remaining columns one at a time (nr==1)
+//    for (Index j2 = packet_cols4; j2 < cols; ++j2) {
+//      const SubMapper dm0 = rhs.getLinearMapper(0, j2);
+//      for (Index k = 0; k < depth; k++) {
+//        *block = dm0(k);
+//        block += 1;
+//      }
+//    }
+//  }
+//};
 
 // // Template specialization for packet_size = 2. We must special-case packet
 // // blocks with nr > packet_size, e.g. PacketBlock<Packet2d, 4>.
