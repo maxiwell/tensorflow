@@ -787,6 +787,24 @@ class TensorContractionSubMapper<
                                                       j + m_col_offset);
   }
 
+  //maxiwell
+  template <typename PacketT>
+  EIGEN_DEVICE_FUNC EIGEN_ALWAYS_INLINE PacketT
+  loadPacketStandard(Index i) const {
+    typedef decltype(m_base_mapper.m_impl) TensorEvaluatorT;
+    return m_base_mapper.template loadPacketStandard<PacketT, TensorEvaluatorT>(
+        i + m_depth_offset, m_rowIndex, m_colIndex, m_otherIndex);
+  }
+
+  //maxiwell
+  template <typename PacketT>
+  EIGEN_DEVICE_FUNC
+  EIGEN_ALWAYS_INLINE PacketT packetNoPadding(const Index depth,
+                                             const Index baseIndex) const {
+    const Index inputIndex = depth + baseIndex;
+    return m_base_mapper.m_impl.template packet<Unaligned>(inputIndex);
+  }
+
   EIGEN_DEVICE_FUNC EIGEN_ALWAYS_INLINE Scalar
   loadCoeffStandard(Index i) const {
     return m_base_mapper.loadCoeffStandard(i + m_depth_offset, m_rowIndex,
