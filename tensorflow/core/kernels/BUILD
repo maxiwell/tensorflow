@@ -934,6 +934,9 @@ cc_library(
     deps = [
         ":eigen_convolution_helpers",
     ],
+    defines = [
+        "EIGEN_DISABLE_CUSTOM_PACK"
+    ],
 )
 
 cc_library(
