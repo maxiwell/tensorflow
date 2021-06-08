@@ -1242,6 +1242,7 @@ struct gemm_pack_rhs<
   }
 };
 
+#if 0
 // Template specialization for packet_size = 2. We must special-case packet
 // blocks with nr > packet_size, e.g. PacketBlock<Packet2d, 4>.
 template <typename NewDimension, Index Rows, Index Cols, typename ArgType,
@@ -1532,6 +1533,7 @@ struct gemm_pack_rhs<
     }
   }
 };
+#endif
 }  // end namespace internal
 
 /** SpatialConvolution
