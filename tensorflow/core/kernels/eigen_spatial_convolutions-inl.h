@@ -17,6 +17,8 @@ limitations under the License.
 #define TENSORFLOW_CORE_KERNELS_EIGEN_SPATIAL_CONVOLUTIONS_INL_H_
 
 #include "tensorflow/core/kernels/eigen_convolution_helpers.h"
+#include <sys/platform/ppc.h>
+
 
 // Note this header is used in both TF and TFLite.
 namespace Eigen {
@@ -1070,6 +1072,11 @@ struct gemm_pack_rhs<
   EIGEN_DONT_INLINE void operator()(Scalar* block, const DataMapper& rhs,
                                     Index depth, Index cols, Index stride = 0,
                                     Index offset = 0) const {
+
+    uint64_t freq = __ppc_get_timebase_freq();
+    uint64_t begin = __ppc_get_timebase();
+    static int gemm_pack_n = 0;
+
     eigen_assert(stride == 0);
     eigen_assert(offset == 0);
 
@@ -1239,6 +1246,9 @@ struct gemm_pack_rhs<
         block += 1;
       }
     }
+
+    uint64_t end = __ppc_get_timebase();
+    printf("gemm_pack_rhs %d: %lf\n", gemm_pack_n++, ((double)(end-begin))/freq);
   }
 };
 
@@ -1567,6 +1577,7 @@ struct gemm_pack_rhs<
  * kernel is called by Eigen when it "finalizes" the block of an output tensor.
  *
  */
+
 template <typename Input, typename Kernel,
           typename OutputKernel = const NoOpOutputKernel>
 EIGEN_DEVICE_FUNC
@@ -1606,6 +1617,10 @@ EIGEN_DEVICE_FUNC
                        const OutputKernel& output_kernel = OutputKernel(),
                        Index padding_top = 0, Index padding_bottom = 0,
                        Index padding_left = 0, Index padding_right = 0) {
+
+        uint64_t freq = __ppc_get_timebase_freq();
+        uint64_t begin = __ppc_get_timebase();
+
   typedef typename internal::traits<Input>::Index TensorIndex;
   TensorRef<Tensor<typename internal::traits<Input>::Scalar,
                    internal::traits<Input>::NumDimensions,
@@ -1724,6 +1739,10 @@ EIGEN_DEVICE_FUNC
     kernel_dims[0] = kernelChannels * kernelRows * kernelCols;
     kernel_dims[1] = kernelFilters;
   }
+
+  uint64_t end = __ppc_get_timebase();
+  printf("SpatialConvolution: %lf\n", ((double)(end-begin))/freq);
+
   if (padding_explicit) {
     return choose(
         Cond<internal::traits<Input>::Layout == ColMajor>(),
