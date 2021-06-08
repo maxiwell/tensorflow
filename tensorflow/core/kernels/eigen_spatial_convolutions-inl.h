@@ -17,6 +17,7 @@ limitations under the License.
 #define TENSORFLOW_CORE_KERNELS_EIGEN_SPATIAL_CONVOLUTIONS_INL_H_
 
 #include "tensorflow/core/kernels/eigen_convolution_helpers.h"
+#include <sys/platform/ppc.h>
 
 #if defined(EIGEN_VECTORIZE_ALTIVEC) || defined(EIGEN_VECTORIZE_VSX)
 #define TF_USE_CUSTOM_EIGEN_PACK 0
@@ -1612,6 +1613,10 @@ EIGEN_DEVICE_FUNC
                        const OutputKernel& output_kernel = OutputKernel(),
                        Index padding_top = 0, Index padding_bottom = 0,
                        Index padding_left = 0, Index padding_right = 0) {
+
+  uint64_t freq = __ppc_get_timebase_freq();
+  uint64_t begin = __ppc_get_timebase();
+
   typedef typename internal::traits<Input>::Index TensorIndex;
   TensorRef<Tensor<typename internal::traits<Input>::Scalar,
                    internal::traits<Input>::NumDimensions,
@@ -1730,6 +1735,10 @@ EIGEN_DEVICE_FUNC
     kernel_dims[0] = kernelChannels * kernelRows * kernelCols;
     kernel_dims[1] = kernelFilters;
   }
+
+  uint64_t end = __ppc_get_timebase();
+  printf("SpatialConvolution: %lf\n", ((double)(end-begin))/freq);
+
   if (padding_explicit) {
     return choose(
         Cond<internal::traits<Input>::Layout == ColMajor>(),
