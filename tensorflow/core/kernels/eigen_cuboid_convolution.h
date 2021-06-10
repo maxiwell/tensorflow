@@ -25,7 +25,7 @@ limitations under the License.
 #include "tensorflow/core/kernels/eigen_convolution_helpers.h"
 
 #if defined(EIGEN_VECTORIZE_ALTIVEC) || defined(EIGEN_VECTORIZE_VSX)
-#define TF_USE_CUSTOM_EIGEN_PACK 0
+#define TF_USE_CUSTOM_EIGEN_PACK 1
 #else
 #define TF_USE_CUSTOM_EIGEN_PACK 1
 #endif
