@@ -16,6 +16,8 @@ limitations under the License.
 #ifndef TENSORFLOW_CORE_KERNELS_EIGEN_BENCHMARK_H_
 #define TENSORFLOW_CORE_KERNELS_EIGEN_BENCHMARK_H_
 
+#include <sys/platform/ppc.h>
+
 #include "third_party/eigen3/unsupported/Eigen/CXX11/Tensor"
 #include "tensorflow/core/framework/tensor_types.h"
 #include "tensorflow/core/kernels/eigen_backward_cuboid_convolutions.h"
@@ -63,10 +65,16 @@ class SpatialConvolutionBenchmarksSuite {
     Filter filter(filter_data, filter_dims);
     Output output(output_data, output_dims);
 
+    uint64_t freq = __ppc_get_timebase_freq();
+    uint64_t begin = __ppc_get_timebase();
+
     for (auto s : state_) {
       output.device(device_) = Eigen::SpatialConvolution(input, filter);
       tensorflow::testing::DoNotOptimize(output);
     }
+
+    uint64_t end = __ppc_get_timebase();
+    printf("SpatialConvolution using __ppc_get_timease(): %lf\n", ((double)(end-begin))/freq);
 
     device_.deallocate(input_data);
     device_.deallocate(filter_data);
