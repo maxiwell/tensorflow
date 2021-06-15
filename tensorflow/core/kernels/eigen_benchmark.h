@@ -16,6 +16,8 @@ limitations under the License.
 #ifndef TENSORFLOW_CORE_KERNELS_EIGEN_BENCHMARK_H_
 #define TENSORFLOW_CORE_KERNELS_EIGEN_BENCHMARK_H_
 
+#include <sys/platform/ppc.h>
+
 #include "third_party/eigen3/unsupported/Eigen/CXX11/Tensor"
 #include "tensorflow/core/framework/tensor_types.h"
 #include "tensorflow/core/kernels/eigen_backward_cuboid_convolutions.h"
@@ -63,10 +65,29 @@ class SpatialConvolutionBenchmarksSuite {
     Filter filter(filter_data, filter_dims);
     Output output(output_data, output_dims);
 
+    uint64_t freq = __ppc_get_timebase_freq();
+    uint64_t begin = __ppc_get_timebase();
+
+    uint64_t conv = 0;
+    uint64_t donotopt = 0;
+    int n = 0;
     for (auto s : state_) {
+      uint64_t begin1 = __ppc_get_timebase();
       output.device(device_) = Eigen::SpatialConvolution(input, filter);
+      uint64_t end1 = __ppc_get_timebase();
+      conv += end1 - begin1;
+
+      begin1 = __ppc_get_timebase();
       tensorflow::testing::DoNotOptimize(output);
+      end1 = __ppc_get_timebase();
+      donotopt += end1 - begin1;
+      n++;
     }
+
+    uint64_t end = __ppc_get_timebase();
+    printf("ppc_timebase: Only SpatialConvolution: %lf\n", ((double)(conv))/freq);
+    printf("ppc_timebase: Only DoNotOptimize: %lf\n", ((double)(donotopt))/freq);
+    printf("ppc_timebase: SpatialConvolution Loop %d iter: %lf\n", n, ((double)(end-begin))/freq);
 
     device_.deallocate(input_data);
     device_.deallocate(filter_data);
