@@ -68,13 +68,26 @@ class SpatialConvolutionBenchmarksSuite {
     uint64_t freq = __ppc_get_timebase_freq();
     uint64_t begin = __ppc_get_timebase();
 
+    uint64_t conv = 0;
+    uint64_t donotopt = 0;
+    int n = 0;
     for (auto s : state_) {
+      uint64_t begin1 = __ppc_get_timebase();
       output.device(device_) = Eigen::SpatialConvolution(input, filter);
+      uint64_t end1 = __ppc_get_timebase();
+      conv += end1 - begin1;
+
+      begin1 = __ppc_get_timebase();
       tensorflow::testing::DoNotOptimize(output);
+      end1 = __ppc_get_timebase();
+      donotopt += end1 - begin1;
+      n++;
     }
 
     uint64_t end = __ppc_get_timebase();
-    printf("SpatialConvolution using __ppc_get_timease(): %lf\n", ((double)(end-begin))/freq);
+    printf("ppc_timebase: Only SpatialConvolution: %lf\n", ((double)(conv))/freq);
+    printf("ppc_timebase: Only DoNotOptimize: %lf\n", ((double)(donotopt))/freq);
+    printf("ppc_timebase: SpatialConvolution Loop %d iter: %lf\n", n, ((double)(end-begin))/freq);
 
     device_.deallocate(input_data);
     device_.deallocate(filter_data);
