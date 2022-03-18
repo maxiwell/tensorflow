@@ -974,6 +974,7 @@ cc_library(
     compatible_with = get_compatible_with_portable(),
     defines = [
         "EIGEN_ALTIVEC_USE_CUSTOM_PACK=0",
+        "EIGEN_ALTIVEC_ENABLE_MMA_DYNAMIC_DISPATCH=1",
     ],
 )
 
