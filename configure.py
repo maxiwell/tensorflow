@@ -1331,6 +1331,20 @@ def main():
   if is_macos():
     environ_cp['TF_NEED_TENSORRT'] = '0'
 
+  if is_ppc64le():
+    # Check if the linker has MMA Dynamic Dispatch support
+    ld_version = run_shell(['ld', '--version']).split()
+
+    ld_version_int = convert_version_to_int(ld_version[3])
+    if ld_version_int is None:
+      ld_version_int = convert_version_to_int(ld_version[4])
+
+    if ld_version_int >= 2035000:
+      # Enable if 'ld' version >= 2.35
+      write_to_bazelrc(
+        'build --copt="-DEIGEN_ALTIVEC_ENABLE_MMA_DYNAMIC_DISPATCH=1"'
+      )
+
   with_xla_support = environ_cp.get('TF_ENABLE_XLA', None)
   if with_xla_support is not None:
     write_to_bazelrc('build --define=with_xla_support=%s' %
